@@ -1,41 +1,55 @@
 from random import uniform
 import numpy as np
 from random import sample
-from math import floor
+from math import floor, exp
 from matplotlib import pyplot as plt
-#TODO kJ/mol
+from mpl_toolkits.mplot3d import Axes3D
+#fig = plt.figure()
+#ax = fig.add_subplot(111, projection='3d')
 
-dim = 3
-N = 256
-T = 90
-Rc = 12
-sigma = 3.7
-epsilon=5.953e-24           #J 1.4e-5 kJ/mol
-density = 400
-molar_mass = 16
-tol = 0.5
-Nb_cycle = 1000
+N = 256 #Number of particules
+T = 90 # Temperature in Kelvin
+Rc = 12 # Cutoff radius for energy calculation
+sigma = 3.7 #Sigma for methane
+epsilon=1.38064852e-23 *1e3 * 120     #  1.656778536802 x 10-24 kJ * 6.02214076×10^23 mol
+Nav = 6.02214076e23  #Avogadro number
+density = 400 #methane densitty
+molar_mass = 16 #methane molar mass
+Nb_cycle = 1000 #Number of monteCarlo cycles
+
+
+def Boltzmann_factor(delta_U, T = 90):
+	#return Boltzmann factor for energy acceptation 
+	k =1.38064852e-20  #   1.38064852e-20 kJ/K   
+	return exp(-delta_U/(k*T))
 
 def Calc_box_length(N, density, molar_mass):
+	#Return montecarlo box size 
     return ((N*molar_mass*1e4)/(6.022*density))**(1./3)
 
 
 def Place_particule(box_length):
-	pos = np.random.rand(3)*box_length
+	#Random particule positionning for initial state
+	pos=[uniform(0,box_length),uniform(0,box_length),uniform(0,box_length)]
 	return pos
 
-def Move_particule(position, box_length):
-	x = position[0] + (np.random.rand()- 0.5) 
-	y = position[1] + (np.random.rand()- 0.5)
-	z = position[2] + (np.random.rand()- 0.5)
+def Move_particule(position, box_length, dampening_factor = 0.75):
+	""" Move the particule from previous position, if the new position
+		is outside the box, it is replaced according periodics conditions
+		Dampening factor is used to improve configuration acceptation """
+	x = position[0] + (uniform(0,1)- 0.5)*dampening_factor
+	y = position[1] + (uniform(0,1)- 0.5)*dampening_factor
+	z = position[2] + (uniform(0,1)- 0.5)*dampening_factor
 
 	#Conditions de periodicité
 	x = x- floor(x/box_length)*box_length
 	y = y- floor(y/box_length)*box_length
 	z = z- floor(z/box_length)*box_length
+
 	return [x,y,z]
 
 def Calc_distance(Particule, Positions, box_length):
+	#Distance calculator inbetween particules
     distance = np.zeros(256)
     i = Particule
 
@@ -44,31 +58,32 @@ def Calc_distance(Particule, Positions, box_length):
     abs_place = abs_place - (abs_place > box_length/2)*box_length
 
     distance = np.sqrt(abs_place[:,0]**2 + abs_place[:,1]**2 + abs_place[:,2]**2)
-
     return distance
 
-def Liste_positions_initiales(N, box_length, tol=0.5):
+def Liste_positions_initiales(N, box_length, tol=3.5):
+	#Initial positions generator
 	positions = np.zeros([N,3])
 
 	for i in range(N):
-		distance = Calc_distance(i, positions, box_length)
 		is_ill_placed = True
 		while(is_ill_placed):
 			positions[i,:] = Place_particule(box_length)
 			distance = Calc_distance(i, positions,box_length)
-			is_ill_placed = (distance[:i]>tol).all() & (distance[i+1:]>tol).all()
-		#print("Particule num:", i)
+			is_ill_placed = (distance[:i]<tol).any() or (distance[i+1:]<tol).any()
 	return positions
 
 L = Calc_box_length(N, density, molar_mass)
 Positions = Liste_positions_initiales(N, L)
 
+#ax.scatter(Positions[:,0], Positions[:,1], Positions[:,2])
+#plt.show(False)
 
 
 def Calc_energy(Particule,distance_vector,Rc, sigma, epsilon):
+	#Energy calculation, return result in kJ
 	i = Particule
 	#Prise en compte du rayon de coupure et de la distance de la particule avec elle même
-	distance_vector = distance_vector[np.where(distance_vector<Rc)]
+	distance_vector = distance_vector[np.where(distance_vector<=Rc)]
 	distance_vector = distance_vector[np.where(distance_vector!= 0)]
 
 	epot = 4*epsilon*(np.sum(((sigma/distance_vector)**12 -(sigma/distance_vector)**6)))
@@ -76,26 +91,34 @@ def Calc_energy(Particule,distance_vector,Rc, sigma, epsilon):
 
 
 
-def Change_configuration(N, box_length, positions,old_energy, tol, Rc, sigma, epsilon):
+def Change_configuration(N, box_length, positions,old_energy, Rc, sigma, epsilon, acceptation_rate, dampening_factor):
 	particule_energy = old_energy
 	moving_order = sample(range(N),N)
 	new_positions = positions.copy()
+	counter1 = 0; counter2 =0
+
+	#work needs to be done around this
+	if acceptation_rate <0.4:
+		dampening_factor = dampening_factor*0.75
 
 	for i in moving_order:
-		is_ill_placed = True
-		while(is_ill_placed):
-			new_positions[i,:] = Move_particule(positions[i,:], box_length)
-			distance = Calc_distance(i, new_positions,box_length)
-			is_ill_placed = (distance[:i]>tol).all() & (distance[i+1:]>tol).all()
-			if is_ill_placed:
-				new_positions[i,:] = positions[i,:]
+		new_positions[i,:] = Move_particule(positions[i,:], box_length, dampening_factor)
+		distance = Calc_distance(i, new_positions,box_length)
 		new_energy = Calc_energy(i, distance,Rc,sigma,epsilon)
 		if (new_energy < particule_energy[i]):
 			particule_energy[i] = new_energy
+			counter1 += 1
 		else:
-			new_positions[i,:]=positions[i,:]
+			B_fac = Boltzmann_factor(new_energy-old_energy[i])
+			if (B_fac>np.random.rand()):    #Acceptation rate is too high
+				particule_energy[i] = new_energy
+				counter2 += 1
+			else:	
+				new_positions[i,:]=positions[i,:]
 
-	return [np.sum(particule_energy), new_positions]
+	acceptation_rate = (counter1+counter2)/N
+	return np.sum(old_energy), new_positions, acceptation_rate, dampening_factor
+
 
 
 #Energie de départ
@@ -106,20 +129,25 @@ for i in range(N):
 epot_total = np.sum(epot)
 
 epot_evolution = np.zeros(Nb_cycle)
-epot_evolution[0] = epot_total
+epot_evolution[0] = epot_total #initial state energy, useless
 print(epot_total)
+acceptation = np.zeros(Nb_cycle)
+
 
 old_positions = Positions
-
+dampening_factor = 0.75 ; acceptation_rate = 1
 for i in range(1,Nb_cycle):
-	epot_total, new_positions = Change_configuration(N, L, old_positions,epot, tol, Rc, sigma, epsilon)
-	old_positions = new_positions
-	epot_evolution[i]=epot_total
-	print (epot_total)
+	epot_total, old_positions, acceptation_rate, dampening_factor = Change_configuration(N, L, old_positions,epot, Rc, sigma, epsilon, acceptation_rate, dampening_factor)
+	epot_evolution[i]=Nav*epot_total/256 
+	acceptation[i] = acceptation_rate
+	#ax.scatter(new_positions[:,0], new_positions[:,1], new_positions[:,2])
+	#fig.canvas.draw()
+	#ax.cla()
 
 
-plt.plot(epot_evolution[50:])
+plt.plot(epot_evolution[20:])
 plt.show()
 
-#for i in range(Nb_cycle):
-#	epot_total = Change_configuration(N, L, Positions, tol, Rc, sigma, epsilon)
+plt.plot(acceptation[20:])
+plt.show()
+
