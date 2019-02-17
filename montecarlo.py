@@ -3,7 +3,7 @@ import numpy as np
 from random import sample
 from math import floor, exp
 from matplotlib import pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d import Axes3D  #For all the commented plot, if you want to see moving particules
 #fig = plt.figure()
 #ax = fig.add_subplot(111, projection='3d')
 
